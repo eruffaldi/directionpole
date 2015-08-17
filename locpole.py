@@ -13,6 +13,7 @@ import sys
 locations = dict(
 	photo="42d 50' 57.822'' N, 11d 41' 3.846'' E",
 	locpole="42.775842d N, 11.695500d E",
+	locpole2="42.773775d N, 11.697626d E",
 	village="42.7667d N, 11.7000d E",
 	BuenosAires="34.6033d S, 58.3817d W",
 	London="51.5072d N, 0.1275d W",
@@ -28,7 +29,10 @@ locations = dict(
 	Kiev="50.4500d N, 30.5233d E",
 	Bucharest="44.4325d N, 26.1039d E",
 	Skopje="42.0000d N, 21.4333d E",
-	NewYork="40.7127d N, 74.0059d W")
+	NewYork="40.7127d N, 74.0059d W",
+	Paris="48.8567d N, 2.3508d E",
+	Bern="46.9500d N, 7.4500d E",
+	Berlin="52.5167d N, 13.3833d E")
 
 # Photo 1 cities
 distances1 = dict(
@@ -53,6 +57,28 @@ distances2 = dict(
 	Sofia=950
 	)
 
+# PoleB Photo 1 cities
+distancesB1 = dict(
+	Paris=991,
+	Bern=573,
+	Berlin=1093,
+	BuenosAires=11175,
+	Varsavia=1262,
+	Minsk=1700,
+	Kiev=1667,
+	Skopje=950
+	)
+
+# PoleB Photo 2 cities
+distancesB2 = dict(
+	London=1399,
+	Cophenhagen=1440,
+	SanPaolo=9499,
+	Vienna=706,
+	Marrakech=2135,
+	Moscow=2350,
+	Chisenau=1429
+	)
 
 # finds best using trilaterization
 def findbesttrilat(target,ltarget):
@@ -113,7 +139,7 @@ kmloutput = None
 
 
 def kmlpush(pt,label,stylename="sn_shaded_dot"):
-	global kmloutput
+	global kmloutput,outkml
 	from pykml.factory import KML_ElementMaker as KML
 	if kmloutput is None:
 		kmloutput = KML.kml(
@@ -152,7 +178,7 @@ def kmlpush(pt,label,stylename="sn_shaded_dot"):
 		)
 	if pt is None:
 		from lxml import etree
-		open("out.kml","wb").write(etree.tostring(kmloutput, pretty_print=True))
+		open(outkml,"wb").write(etree.tostring(kmloutput, pretty_print=True))
 		return
 	pt = KML.Placemark(
 	    KML.name(label),
@@ -166,10 +192,88 @@ def kmlpush(pt,label,stylename="sn_shaded_dot"):
 	kmloutput.Document.append(pt)
 
 
-if __name__ == "__main__":
 
-	# disable London fi argument passed
-	if len(sys.argv) == 2:
+#compute point that is the average of the trilat
+def faveraginglat(c,pts):
+	pp = GeoPoint(LatCoord(c[0],None,None),LongCoord(c[1],None,None))
+	x = np.array([(xd.measure(p,pp)["distanceKm"]) for p in pts])
+	return np.sum(x**2)
+
+
+def tryminimizeND(pinitial,xset):
+	def f(c,pts):
+		pp = GeoPoint(LatCoord(c[0],None,None),LongCoord(c[1],None,None))
+		x = np.array([(xd.measure(p,pp)["distanceKm"]) for p in pts])
+		return np.sum(x**2)
+	xset = [p[1] for p in xset.values()]
+	initial_guess = np.array(pinitial.astuple())
+	#res = leastsq(f,initial_guess,args = (sourcep,sourced,))
+	res = minimize(f,initial_guess,args=(xset,),options=dict(maxiter=20000))
+	pres = GeoPoint(*[float(x) for x in res.x])
+	return dict(pos=pres,distanceKm=xd.measure(pres,lt)["distanceKm"],)
+
+def tryminimizePD(pinitial,xset):
+	def fPD(c,pts):
+		pp = GeoPoint(LatCoord(c[0],None,None),LongCoord(c[1],None,None))
+		x = np.array([(xd.measure(p[1],pp)["distanceKm"]-p[0]) for p in pts])
+		return np.sum(x**2)
+
+	xset = [p for p in xset.values()]
+	initial_guess = np.array(pinitial.astuple())
+	#res = leastsq(f,initial_guess,args = (sourcep,sourced,))
+	res = minimize(fPD,initial_guess,args=(xset,),options=dict(maxiter=20000))
+	pres = GeoPoint(*[float(x) for x in res.x])
+	return dict(pos=pres,distanceKm=xd.measure(pres,lt)["distanceKm"],)
+
+def tryminimizeRD(pinitial,xset):
+	def fRD(c,pts):
+		pp = GeoPoint(LatCoord(c[0],None,None),LongCoord(c[1],None,None))
+		x = np.array([(xd.measure(p[1],pp)["distanceKm"]-p[0]) for p in pts])
+		return np.sum(x**2)
+
+	xset = [(xd.measure(p[1],lt)["distanceKm"],p[1]) for p in xset.values()]
+	print xset
+	initial_guess = np.array(pinitial.astuple())
+	#res = leastsq(f,initial_guess,args = (sourcep,sourced,))
+	res = minimize(fRD,initial_guess,args=(xset,))
+	pres = GeoPoint(*[float(x) for x in res.x])
+	return dict(pos=pres,distanceKm=xd.measure(pres,lt)["distanceKm"],)
+
+
+
+if __name__ == "__main__":
+	# TODO pole2 set
+	nolondon = False
+	secondset = False
+	kml = False
+	initnearest = False
+
+	for x in sys.argv[1:]:
+		if x == "--help":
+			print "options: nolondon secondset kml initnearest"
+			sys.exit(0)
+		elif x == "nolondon":
+			nolondon = True
+			print "removing london"
+		elif x == "secondset":
+			secondset = True
+			print "second set"
+		elif x == "kml":
+			kml = True
+			print "produce kml"
+		elif x == "initnearest":
+			initnearest = True
+
+	# second pole set
+	if secondset:
+		distances1 = distancesB1
+		distances2 = distancesB2
+		locations["locpole"] = locations["locpole2"]
+		outkml = "outB.kml"
+	else:
+		outkml = "out.kml"
+
+	if nolondon:
 		del distances2["London"]
 
 	xd = xdistance()
@@ -186,19 +290,21 @@ if __name__ == "__main__":
 	l2 = glocations["photo"]
 	l3 = glocations["locpole"]
 
-	kmlpush(l1,"Village","pushpin")
-	kmlpush(l2,"Photo GPS")
-	kmlpush(l1,"Pole Location","pushpin")
+	if kml:
+		kmlpush(l1,"Village","pushpin")
+		kmlpush(l2,"Photo GPS")
+		kmlpush(l1,"Pole Location","pushpin")
 
 	lt = l3 # use the pole as target
 
 	# Info
 	print "google:",l1,"photo:",l2,"distanceKm",xd.measure(l1,l2)["distanceKm"]
 	print "google:",l1,"locpole:",l3,"distanceKm",xd.measure(l1,l3)["distanceKm"]
+	print "------listing-------"
 	print "location,reported,measured zara,measured photo"
 
 
-	print "\nfirst photo"
+	print "----first photo-------"
 	w = 0
 	for x,d0 in distances1.items():
 		l = glocations[x]
@@ -206,7 +312,7 @@ if __name__ == "__main__":
 		print d0,d,d0-d,(d0-d)/d*100,l.lat.value,l.lat.value
 		w = w + math.fabs(d0-d)
 
-	print "\nsecond photo"
+	print "----second photo------"
 	for x,d0 in distances2.items():
 		l = glocations[x]
 		d = xd.measure(l,lt)["distanceKm"]
@@ -216,79 +322,35 @@ if __name__ == "__main__":
 	print "mean",w/(len(distances1)+len(distances2))
 	#print "set1 lookup"
 
-
+	print "set1 is set from first photo"
+	print "set2 is set from second photo"
 	pts1 = dict([(k,(v,glocations[k])) for k,v in distances1.items()])
 	pts2 = dict([(k,(v,glocations[k])) for k,v in distances2.items()])
 	ptsa = dict(pts1.items()+pts2.items())
-	for k,v in ptsa.items():
-		kmlpush(v[1],k)
+	if kml:
+		for k,v in ptsa.items():
+			kmlpush(v[1],k)
 
+	print "----use trilateration to find optimal---"
 	allp,bestinfo = findbesttrilat(ptsa,lt)
 
 	# Optional write to KML
-	if False:
-		for curset,p,d in allp:
+	if kml:
+		for curset,p,d in allp:			
 			kmlpush(p,"trilat " + " ".join(curset))
 
 
 	if bestinfo[0] is not None:
-		kmlpush(bestinfo[0],"Best of trilateration")
+		if kml:
+			kmlpush(bestinfo[0],"Best of trilateration")
 		print bestinfo
-		print "best all distance",xd.measure(bestinfo[0],lt)["distanceKm"]
+		print "best all distanceKm: ",xd.measure(bestinfo[0],lt)["distanceKm"]
 
 	cogp = cog([x[1] for x in allp])
-	print "cog distance",xd.measure(cogp,lt)["distanceKm"]
+	print "cog distanceKm ",xd.measure(cogp,lt)["distanceKm"]
 
-	kmlpush(cogp,"Cog of trilateration")
-
-
-	#compute point that is the average of the trilat
-	def faveraginglat(c,pts):
-		pp = GeoPoint(LatCoord(c[0],None,None),LongCoord(c[1],None,None))
-		x = np.array([(xd.measure(p,pp)["distanceKm"]) for p in pts])
-		return np.sum(x**2)
-
-
-	def tryminimizeND(pinitial,xset):
-		def f(c,pts):
-			pp = GeoPoint(LatCoord(c[0],None,None),LongCoord(c[1],None,None))
-			x = np.array([(xd.measure(p,pp)["distanceKm"]) for p in pts])
-			return np.sum(x**2)
-		xset = [p[1] for p in xset.values()]
-		initial_guess = np.array(pinitial.astuple())
-		#res = leastsq(f,initial_guess,args = (sourcep,sourced,))
-		res = minimize(f,initial_guess,args=(xset,),options=dict(maxiter=20000))
-		pres = GeoPoint(*[float(x) for x in res.x])
-		return (pres,xd.measure(pres,lt)["distanceKm"],)
-
-	def tryminimizePD(pinitial,xset):
-		def fPD(c,pts):
-			pp = GeoPoint(LatCoord(c[0],None,None),LongCoord(c[1],None,None))
-			x = np.array([(xd.measure(p[1],pp)["distanceKm"]-p[0]) for p in pts])
-			return np.sum(x**2)
-
-		xset = [p for p in xset.values()]
-		initial_guess = np.array(pinitial.astuple())
-		#res = leastsq(f,initial_guess,args = (sourcep,sourced,))
-		res = minimize(fPD,initial_guess,args=(xset,),options=dict(maxiter=20000))
-		pres = GeoPoint(*[float(x) for x in res.x])
-		return (pres,xd.measure(pres,lt)["distanceKm"],)
-
-	def tryminimizeRD(pinitial,xset):
-		def fRD(c,pts):
-			pp = GeoPoint(LatCoord(c[0],None,None),LongCoord(c[1],None,None))
-			x = np.array([(xd.measure(p[1],pp)["distanceKm"]-p[0]) for p in pts])
-			return np.sum(x**2)
-
-		xset = [(xd.measure(p[1],lt)["distanceKm"],p[1]) for p in xset.values()]
-		print xset
-		initial_guess = np.array(pinitial.astuple())
-		#res = leastsq(f,initial_guess,args = (sourcep,sourced,))
-		res = minimize(fRD,initial_guess,args=(xset,))
-		pres = GeoPoint(*[float(x) for x in res.x])
-		return (pres,xd.measure(pres,lt)["distanceKm"],)
-
-
+	if kml:
+		kmlpush(cogp,"Cog of trilateration")
 
 	# long
 	if True:
@@ -299,55 +361,70 @@ if __name__ == "__main__":
 
 		res = minimize(faveraginglat,initial_guess,args=(alltrilat,))#,options=dict(maxiter=20000))
 		pres = GeoPoint(*[float(x) for x in res.x])
-		print "average of trilat result",pres,xd.measure(pres,lt)["distanceKm"]
+		print "average of trilat result",pres," distanceKm",xd.measure(pres,lt)["distanceKm"]
 
-		kmlpush(pres,"Average point of trilateration")
+		if kml:
+			kmlpush(pres,"Average point of trilateration")
 
-	pinitial = bestinfo[0]
+	if initnearest:
+		print "***using nearest place for initialization per set***"
+		pinitial = (
+			ptsa[min([k for k in ptsa.keys()],key=lambda x: ptsa[k][0])][1],
+			pts1[min([k for k in pts1.keys()],key=lambda x: pts1[k][0])][1],
+			pts2[min([k for k in pts2.keys()],key=lambda x: pts2[k][0])][1],
+		)
+	else:
+		print "***using best of trilaterationf as initi"
+		pinitial = (bestinfo[0],bestinfo[0],bestinfo[0])
 
-	print "Using position only"
+	print pinitial
 
-	r1 = tryminimizeND(pinitial,pts1)
-	r2 = tryminimizeND(pinitial,pts2)
-	ra = tryminimizeND(pinitial,ptsa)
+	print "------Using position only"
 
-	print "initial",pinitial,"distance is",xd.measure(pinitial,lt)["distanceKm"]
-	print "set1",r1
-	print "set2",r2
-	print "all",ra
+	r1 = tryminimizeND(pinitial[1],pts1)
+	r2 = tryminimizeND(pinitial[2],pts2)
+	ra = tryminimizeND(pinitial[0],ptsa)
 
-	kmlpush(r1[0],"Multilateration without Distance - Set 1")
-	kmlpush(r2[0],"Multilateration without Distance - Set 2")
-	kmlpush(ra[0],"Multilateration without Distance - All")
+	print "\tinitial",pinitial,"distanceKm is",xd.measure(pinitial[0],lt)["distanceKm"]
+	print "\tset1",r1
+	print "\tset2",r2
+	print "\tall",ra
 
-
-	print "Using pole distance"
-
-	r1 = tryminimizePD(pinitial,pts1)
-	r2 = tryminimizePD(pinitial,pts2)
-	ra = tryminimizePD(pinitial,ptsa)
-
-	print "initial",pinitial,"distance is",xd.measure(pinitial,l1)["distanceKm"]
-	print "set1",r1
-	print "set2",r2
-	print "all",ra
-
-	kmlpush(r1[0],"Multilateration with Distance - Set 1","redpushpin")
-	kmlpush(r2[0],"Multilateration with Distance - Set 2","redpushpin")
-	kmlpush(ra[0],"Multilateration with Distance - All","redpushpin")
+	if kml:
+		kmlpush(r1[0],"Multilateration without Distance - Set 1")
+		kmlpush(r2[0],"Multilateration without Distance - Set 2")
+		kmlpush(ra[0],"Multilateration without Distance - All")
 
 
-	print "Using real distance"
+	print "------Using pole distance"
 
-	r1 = tryminimizeRD(pinitial,pts1)
-	r2 = tryminimizeRD(pinitial,pts2)
-	ra = tryminimizeRD(pinitial,ptsa)
+	r1 = tryminimizePD(pinitial[1],pts1)
+	r2 = tryminimizePD(pinitial[2],pts2)
+	ra = tryminimizePD(pinitial[0],ptsa)
+
+	print "\tinitial",pinitial,"distanceKm is",xd.measure(pinitial[0],l1)["distanceKm"]
+	print "\tset1",r1
+	print "\tset2",r2
+	print "\tall",ra
+
+	if kml:
+		kmlpush(r1[0],"Multilateration with Distance - Set 1","redpushpin")
+		kmlpush(r2[0],"Multilateration with Distance - Set 2","redpushpin")
+		kmlpush(ra[0],"Multilateration with Distance - All","redpushpin")
 
 
-	print "initial",pinitial,"distance is",xd.measure(pinitial,lt)["distanceKm"]
-	print "set1",r1
-	print "set2",r2
-	print "all",ra
+	print "------Using real distance"
+
+	r1 = tryminimizeRD(pinitial[1],pts1)
+	r2 = tryminimizeRD(pinitial[2],pts2)
+	ra = tryminimizeRD(pinitial[0],ptsa)
+
+
+	print "\tinitial",pinitial,"distanceKm is",xd.measure(pinitial[0],lt)["distanceKm"]
+	print "\tset1",r1
+	print "\tset2",r2
+	print "\tall",ra
 
 	# Flush the KML
-	kmlpush(None,None)
+	if kml:	
+		kmlpush(None,None)
